@@ -1,0 +1,63 @@
+{
+  "name": "wallpaper-switcher-gui",
+  "version": "1.0.0",
+  "description": "Wallpaper Switcher - Desktop GUI",
+  "main": "electron/main.js",
+  "author": {
+    "name": "gbatistadev",
+    "email": "gbatistadev@users.noreply.github.com"
+  },
+  "homepage": "https://github.com/gbatistadev/wallpaper-switcher",
+  "scripts": {
+    "dev": "next dev -p 3000 & sleep 3 && electron .",
+    "build": "next build && electron-builder --linux deb",
+    "build:all": "next build && electron-builder --linux deb AppImage",
+    "nextdev": "next dev -p 3000",
+    "electrondev": "electron .",
+    "start": "electron ."
+  },
+  "build": {
+    "appId": "com.gbatistadev.wallpaper-switcher",
+    "productName": "Wallpaper Switcher",
+    "linux": {
+      "target": ["deb", "AppImage"],
+      "category": "Utility",
+      "icon": "/home/gbatistadev/Pictures/Icons/omnitrix.png",
+      "maintainer": "gbatistadev <gbatistadev@users.noreply.github.com>"
+    },
+    "deb": {
+      "depends": ["libgtk-3-0", "libnotify4", "libnss3", "libxss1", "libxtst6", "xdg-utils", "libatspi2.0-0", "libuuid1", "libsecret-1-0", "python3", "python3-pil"],
+      "afterInstall": "build/after-install.sh"
+    },
+    "directories": {
+      "output": "dist"
+    },
+    "extraResources": [
+      {
+        "from": "wallpaper-switcher.py",
+        "to": "wallpaper-switcher.py"
+      }
+    ],
+    "files": [
+      "out/**/*",
+      "electron/**/*",
+      "package.json"
+    ]
+  },
+  "dependencies": {
+    "next": "^14.0.0",
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0",
+    "sonner": "^2.0.8"
+  },
+  "devDependencies": {
+    "@types/node": "26.4.1",
+    "@types/react": "19.2.18",
+    "autoprefixer": "^10.5.5",
+    "electron": "^28.0.0",
+    "electron-builder": "^24.0.0",
+    "postcss": "^8.5.28",
+    "tailwindcss": "^3.4.19",
+    "typescript": "7.0.2"
+  }
+}
