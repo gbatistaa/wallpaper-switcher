@@ -18,6 +18,7 @@ export default function Home() {
   const [booted, setBooted] = useState(false);
   const [currentMode, setCurrentMode] = useState('photo');
   const [videos, setVideos] = useState([]);
+  const [pendingVideoDelete, setPendingVideoDelete] = useState(null);
 
   // applyTimer roda num setTimeout; o closure capturaria 'config' antigo.
   // Um ref sempre aponta para a ultima config commitada (evita agendar
@@ -68,13 +69,23 @@ export default function Home() {
     if (!files || files.length === 0) return;
     setLoading(true);
     let photoCount = 0;
+    let videoCount = 0;
     for (const file of files) {
-      const id = toast.loading(`COMPRIMINDO: ${file.split('/').pop()}`);
-      await api.addImage(file);
-      toast.dismiss(id);
-      photoCount++;
+      const name = file.split('/').pop();
+      const id = toast.loading(`${/\.(mp4|mkv|webm)$/i.test(file) ? 'INJETANDO' : 'COMPRIMINDO'}: ${name}`);
+      if (/\.(mp4|mkv|webm)$/i.test(file)) {
+        const result = await api.addVideo(file);
+        toast.dismiss(id);
+        if (result.success) videoCount++;
+        else toast.error('FALHA: ' + result.output);
+      } else {
+        await api.addImage(file);
+        toast.dismiss(id);
+        photoCount++;
+      }
     }
-    toast.success(`INJETADO: ${photoCount} FOTO(S)`);
+    if (photoCount > 0) toast.success(`INJETADO: ${photoCount} FOTO(S)`);
+    if (videoCount > 0) toast.success(`INJETADO: ${videoCount} VIDEO(S)`);
     await loadData();
     setLoading(false);
   }
@@ -87,14 +98,19 @@ export default function Home() {
     if (files.length === 0) return;
     setLoading(true);
     let photoCount = 0;
+    let videoCount = 0;
     for (const file of files) {
       const filePath = file.path || file.webkitRelativePath || file.name;
       if (file.type.startsWith('image/')) {
         await api.addImage(filePath);
         photoCount++;
+      } else if (file.type.startsWith('video/') || /\.(mp4|mkv|webm)$/i.test(filePath)) {
+        await api.addVideo(filePath);
+        videoCount++;
       }
     }
     if (photoCount > 0) toast.success(`INJETADO: ${photoCount} FOTO(S)`);
+    if (videoCount > 0) toast.success(`INJETADO: ${videoCount} VIDEO(S)`);
     await loadData();
     setLoading(false);
   }
@@ -117,6 +133,7 @@ export default function Home() {
     const api = window.api;
     setLoading(true);
     const id = toast.loading('RENDERIZANDO WALLPAPER...');
+    await api.quitHidamari();
     const result = await api.setWallpaper();
     toast.dismiss(id);
     if (result.success) {
@@ -137,21 +154,69 @@ export default function Home() {
     if (result.success) {
       toast.success('VIDEO ATIVADO VIA HIDAMARI');
     } else {
+      toast.error('FALHA: ' + (result.output || 'erro desconhecido'));
+    }
+    await loadData();
+    setLoading(false);
+  }
+
+  async function handleRenderPhoto(img) {
+    const api = window.api;
+    setLoading(true);
+    const id = toast.loading(`RENDERIZANDO: ${img.original_name}`);
+    await api.quitHidamari();
+    const result = await api.setWallpaper(img.id);
+    toast.dismiss(id);
+    if (result.success) {
+      toast.success('WALLPAPER ATIVADO');
+    } else {
       toast.error('FALHA: ' + result.output);
     }
     await loadData();
     setLoading(false);
   }
 
+  async function handleRenderVideo(vid) {
+    const api = window.api;
+    setLoading(true);
+    const id = toast.loading(`RENDERIZANDO: ${vid.name}`);
+    const result = await api.setVideo(vid.name);
+    toast.dismiss(id);
+    if (result.success) {
+      toast.success('VIDEO ATIVADO VIA HIDAMARI');
+    } else {
+      toast.error('FALHA: ' + (result.output || 'erro desconhecido'));
+    }
+    await loadData();
+    setLoading(false);
+  }
+
+  async function handleRemoveVideo() {
+    if (!pendingVideoDelete) return;
+    const api = window.api;
+    setDeleteBusy(true);
+    try {
+      const result = await api.removeVideo(pendingVideoDelete.name);
+      if (result.success) toast.success('VIDEO DELETADO');
+      else toast.error('FALHA: ' + result.output);
+    } finally {
+      setDeleteBusy(false);
+    }
+    setPendingVideoDelete(null);
+    await loadData();
+  }
+
   async function handleModeSwitch(mode) {
     if (mode === currentMode) return;
     const api = window.api;
+    setLoading(true);
+    const id = toast.loading(`TROCANDO MODO PARA ${mode.toUpperCase()}...`);
     await api.setMode(mode);
     setCurrentMode(mode);
+    toast.dismiss(id);
     toast.success(`MODO: ${mode.toUpperCase()}`);
-    if (mode === 'video') {
-      await loadData();
-    }
+    await loadData();
+    setLoading(false);
   }
 
   async function handleToggleTimer() {
@@ -358,20 +423,25 @@ export default function Home() {
             {/* Stats */}
             <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
               <div className="cyber-stat">
-                <span style={{ color: 'var(--neon-magenta)' }}>&#9673;</span>
+                <span style={{ color: 'var(--neon-cyan)' }}>&#9673;</span>
                 <span className="num">{images.length}</span>
                 FOTOS
               </div>
               <div className="cyber-stat">
+                <span style={{ color: 'var(--neon-magenta)' }}>&#9673;</span>
+                <span className="num">{videos.length}</span>
+                VIDEOS
+              </div>
+              <div className="cyber-stat">
                 <span style={{ color: 'var(--neon-green)' }}>SUM</span>
-                <span className="num">{totalMedia}</span>
+                <span className="num">{images.length + videos.length}</span>
                 TOTAL
               </div>
             </div>
           </div>
 
           {/* ███ MODE TOGGLE ███ */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 20, marginBottom: 8 }}>
             <span style={{ fontFamily: 'Orbitron', fontWeight: 600, fontSize: 12, letterSpacing: 2, color: 'var(--text-secondary)' }}>
               MODE:
             </span>
@@ -627,6 +697,14 @@ export default function Home() {
                   >
                     x
                   </button>
+                  <button
+                    className="cyber-render"
+                    title="Renderizar esta foto"
+                    disabled={loading}
+                    onClick={(e) => { e.stopPropagation(); handleRenderPhoto(img); }}
+                  >
+                    &#9654;
+                  </button>
                 </div>
               ))}
             </div>
@@ -658,9 +736,20 @@ export default function Home() {
                 >
                   <div style={{
                     height: 140, background: 'var(--bg-deep)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    borderBottom: '1px solid rgba(255,0,255,0.15)',
+                    borderBottom: '1px solid rgba(255,0,255,0.15)', overflow: 'hidden', position: 'relative',
                   }}>
-                    <span style={{ fontSize: 32, color: 'var(--neon-magenta)', textShadow: '0 0 15px rgba(255,0,255,0.5)' }}>&#127909;</span>
+                    {vid.thumbnailUrl ? (
+                      <img
+                        src={vid.thumbnailUrl}
+                        alt={vid.name}
+                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                        onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling && (e.target.nextSibling.style.display = 'flex'); }}
+                      />
+                    ) : null}
+                    <span style={{
+                      fontSize: 32, color: 'var(--neon-magenta)', textShadow: '0 0 15px rgba(255,0,255,0.5)',
+                      display: vid.thumbnailUrl ? 'none' : 'flex',
+                    }}>&#127909;</span>
                   </div>
                   <div style={{ padding: '10px 12px' }}>
                     <div style={{
@@ -673,6 +762,21 @@ export default function Home() {
                       {formatSize(vid.size)}
                     </div>
                   </div>
+                  <button
+                    className="cyber-delete"
+                    disabled={deleteBusy}
+                    onClick={(e) => { e.stopPropagation(); setPendingVideoDelete(vid); }}
+                  >
+                    x
+                  </button>
+                  <button
+                    className="cyber-render magenta"
+                    title="Renderizar este video"
+                    disabled={loading}
+                    onClick={(e) => { e.stopPropagation(); handleRenderVideo(vid); }}
+                  >
+                    &#9654;
+                  </button>
                 </div>
               ))}
             </div>
@@ -762,6 +866,59 @@ export default function Home() {
                   CANCELAR
                 </button>
                 <button className="cyber-btn magenta" onClick={handleRemove} disabled={deleteBusy} style={{ padding: '9px 18px', fontSize: 11 }}>
+                  {deleteBusy ? 'DELETANDO...' : 'DELETAR'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ███ VIDEO DELETE CONFIRM MODAL ███ */}
+        {pendingVideoDelete && (
+          <div
+            style={{
+              position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: 'rgba(3,4,14,0.85)', backdropFilter: 'blur(3px)', animation: 'glitchIn 0.25s ease',
+            }}
+            onClick={() => !deleteBusy && setPendingVideoDelete(null)}
+          >
+            <div
+              className="cyber-card cyber-corners"
+              style={{
+                maxWidth: 420, width: '100%', margin: '0 16px', padding: '26px 28px',
+                border: '1px solid rgba(255,0,128,0.5)',
+                boxShadow: '0 0 35px rgba(255,0,128,0.25), inset 0 0 25px rgba(255,0,128,0.05)',
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+                <span style={{ color: 'var(--neon-pink)', fontSize: 18, textShadow: '0 0 10px rgba(255,0,128,0.5)' }}>&#9888;</span>
+                <span style={{ fontFamily: 'Orbitron', fontWeight: 600, fontSize: 13, letterSpacing: 2, color: 'var(--neon-pink)' }}>
+                  CONFIRM_DELETE_VIDEO
+                </span>
+              </div>
+              {pendingVideoDelete.thumbnailUrl && (
+                <div style={{ marginBottom: 14, overflow: 'hidden', border: '1px solid rgba(255,0,128,0.35)', boxShadow: 'inset 0 0 18px rgba(255,0,128,0.08)' }}>
+                  <img
+                    src={pendingVideoDelete.thumbnailUrl}
+                    alt={pendingVideoDelete.name}
+                    style={{ width: '100%', height: 120, objectFit: 'cover', display: 'block' }}
+                    onError={(e) => { e.target.style.display = 'none'; }}
+                  />
+                </div>
+              )}
+              <div style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.7 }}>
+                Deletar permanentemente o video:
+                <br />
+                <span style={{ color: 'var(--neon-magenta)' }}>&gt; {pendingVideoDelete.name}</span>
+                <br />
+                <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>Removido da pasta ~/Videos/Hidamari/. Essa ação não pode ser desfeita.</span>
+              </div>
+              <div style={{ display: 'flex', gap: 12, marginTop: 22, justifyContent: 'flex-end' }}>
+                <button className="cyber-btn" onClick={() => setPendingVideoDelete(null)} disabled={deleteBusy} style={{ padding: '9px 18px', fontSize: 11 }}>
+                  CANCELAR
+                </button>
+                <button className="cyber-btn magenta" onClick={handleRemoveVideo} disabled={deleteBusy} style={{ padding: '9px 18px', fontSize: 11 }}>
                   {deleteBusy ? 'DELETANDO...' : 'DELETAR'}
                 </button>
               </div>

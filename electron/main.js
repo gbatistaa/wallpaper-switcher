@@ -9,6 +9,7 @@ const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 const METADATA_FILE = path.join(CONFIG_DIR, 'metadata.json');
 const STORAGE_DIR = path.join(CONFIG_DIR, 'storage');
 const PHOTOS_DIR = path.join(STORAGE_DIR, 'photos');
+const THUMBNAILS_DIR = path.join(STORAGE_DIR, 'thumbnails');
 const WALLPAPERS_DIR = path.join(CONFIG_DIR, 'wallpapers');
 const SERVER_PORT = 18234;
 
@@ -36,6 +37,20 @@ function startServer() {
       if (url.startsWith('/photos/')) {
         const filename = url.replace('/photos/', '');
         const filePath = path.join(PHOTOS_DIR, filename);
+        if (fs.existsSync(filePath)) {
+          const content = fs.readFileSync(filePath);
+          res.writeHead(200, { 'Content-Type': 'image/jpeg' });
+          res.end(content);
+          return;
+        }
+        res.writeHead(404); res.end('Not found');
+        return;
+      }
+
+      // Serve thumbnails de videos
+      if (url.startsWith('/thumbnails/')) {
+        const filename = url.replace('/thumbnails/', '');
+        const filePath = path.join(THUMBNAILS_DIR, filename);
         if (fs.existsSync(filePath)) {
           const content = fs.readFileSync(filePath);
           res.writeHead(200, { 'Content-Type': 'image/jpeg' });
@@ -208,6 +223,7 @@ function ensureBackend() {
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
   fs.mkdirSync(STORAGE_DIR, { recursive: true });
   fs.mkdirSync(PHOTOS_DIR, { recursive: true });
+  fs.mkdirSync(THUMBNAILS_DIR, { recursive: true });
   fs.mkdirSync(WALLPAPERS_DIR, { recursive: true });
 
   if (!fs.existsSync(CONFIG_FILE)) {
@@ -265,7 +281,7 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('add-image', async (_, filePath) => runScript(`add "${filePath}"`));
   ipcMain.handle('remove-media', (_, id) => runScript(`remove "${id}"`));
-  ipcMain.handle('set-wallpaper', () => runScript('set'));
+  ipcMain.handle('set-wallpaper', (_, id) => runScript(id ? `set --id "${id}"` : 'set'));
 
   ipcMain.handle('get-mode', () => {
     const cfg = getConfig();
@@ -282,10 +298,34 @@ app.whenReady().then(async () => {
   ipcMain.handle('list-videos', () => {
     const result = runScript('list-videos');
     if (!result.success) return [];
-    try { return JSON.parse(result.output.trim()); } catch (e) { return []; }
+    try {
+      const vids = JSON.parse(result.output.trim());
+      return vids.map(v => ({
+        ...v,
+        thumbnailUrl: v.thumbnail ? `http://127.0.0.1:${SERVER_PORT}/thumbnails/${path.basename(v.thumbnail)}` : null,
+      }));
+    } catch (e) { return []; }
   });
 
-  ipcMain.handle('set-video', () => runScript('set-video'));
+  ipcMain.handle('set-video', (_, name) => runScript(name ? `set-video "${name}"` : 'set-video'));
+
+  ipcMain.handle('quit-hidamari', () => runScript('quit-hidamari'));
+
+  ipcMain.handle('remove-video', (_, name) => runScript(`remove-video "${name}"`));
+
+  ipcMain.handle('add-video', async (_, filePath) => runScript(`add-video "${filePath}"`));
+
+  ipcMain.handle('select-files', async () => {
+    const result = await dialog.showOpenDialog({
+      properties: ['openFile', 'multiSelections'],
+      filters: [
+        { name: 'Media', extensions: ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'gif', 'mp4', 'mkv', 'webm'] },
+        { name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'gif'] },
+        { name: 'Videos', extensions: ['mp4', 'mkv', 'webm'] },
+      ],
+    });
+    return result.filePaths;
+  });
 
   ipcMain.handle('get-images', () => {
     const meta = getMetadata();
@@ -319,14 +359,6 @@ app.whenReady().then(async () => {
       tzOffsetSeconds,
       tzName,
     };
-  });
-
-  ipcMain.handle('select-files', async () => {
-    const result = await dialog.showOpenDialog({
-      properties: ['openFile', 'multiSelections'],
-      filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'gif'] }],
-    });
-    return result.filePaths;
   });
 
   // Controles de janela (frame: false)

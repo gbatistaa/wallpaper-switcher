@@ -40,6 +40,11 @@ HIDAMARI_VIDEOS_DIR = Path.home() / "Videos" / "Hidamari"
 HIDAMARI_DBUS_DEST = "io.github.jeffshee.Hidamari.server"
 HIDAMARI_DBUS_PATH = "/io/github/jeffshee/Hidamari/server"
 HIDAMARI_DBUS_IFACE = "io.github.jeffshee.hidamari.server"
+HIDAMARI_CONFIG_FILE = (
+    Path.home() / ".var" / "app" / "io.github.jeffshee.Hidamari"
+    / "config" / "hidamari" / "config.json"
+)
+THUMBNAILS_DIR = STORAGE_DIR / "thumbnails"
 
 DEFAULT_CONFIG = {
     "timer_hours": 2,
@@ -150,70 +155,284 @@ def get_video_files():
     )
 
 
-def set_video_via_dbus(video_path):
-    """Envia video para o Hidamari via D-Bus."""
+def _gdbus_video_call(video_path):
+    """Uma tentativa de envio via D-Bus. Retorna (ok, stderr)."""
+    result = subprocess.run(
+        [
+            "gdbus", "call", "--session",
+            "--dest", HIDAMARI_DBUS_DEST,
+            "--object-path", HIDAMARI_DBUS_PATH,
+            "--method", f"{HIDAMARI_DBUS_IFACE}.video",
+            str(video_path), "Default",
+        ],
+        capture_output=True, text=True, timeout=10,
+    )
+    return result.returncode == 0, result.stderr.strip()
+
+
+def _write_hidamari_video_config(video_path):
+    """Persiste o video no config do Hidamari.
+
+    O Hidamari nao salva o config quando recebe video() via D-Bus:
+    no setup do player ele atualiza apenas em memoria e reinicia o
+    processo do player, que relê o config do DISCO. Se nao gravarmos
+    antes, o novo player volta a tocar o ultimo video salvo.
+    """
     try:
-        result = subprocess.run(
-            [
-                "gdbus", "call", "--session",
-                "--dest", HIDAMARI_DBUS_DEST,
-                "--object-path", HIDAMARI_DBUS_PATH,
-                "--method", f"{HIDAMARI_DBUS_IFACE}.video",
-                str(video_path), "Default",
-            ],
-            capture_output=True, text=True, timeout=10,
-        )
-        if result.returncode != 0:
-            print(f"ERRO D-Bus: {result.stderr.strip()}")
-            return False
-        print(f"  Video Hidamari: {Path(video_path).name}")
+        if HIDAMARI_CONFIG_FILE.exists():
+            with open(HIDAMARI_CONFIG_FILE) as f:
+                cfg = json.load(f)
+        else:
+            cfg = {}
+            HIDAMARI_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+        cfg["mode"] = "MODE_VIDEO"
+        src = cfg.get("data_source") or {}
+        if not isinstance(src, dict):
+            src = {}
+        for key in list(src.keys()):
+            src[key] = str(video_path)
+        src["Default"] = str(video_path)
+        cfg["data_source"] = src
+
+        with open(HIDAMARI_CONFIG_FILE, "w") as f:
+            json.dump(cfg, f, indent=3)
         return True
-    except FileNotFoundError:
-        print("ERRO: gdbus nao encontrado. Instale gdbus.")
+    except Exception as e:
+        print(f"ERRO ao gravar config Hidamari: {e}")
         return False
-    except subprocess.TimeoutExpired:
-        print("ERRO: D-Bus timeout.")
-        return False
+
+
+def _ensure_hidamari_running():
+    """Garante Hidamari rodando em background. Retorna True se ok."""
+    for _ in range(3):
+        try:
+            out = subprocess.run(
+                ["flatpak", "ps", "--columns=application"],
+                capture_output=True, text=True, timeout=10,
+            ).stdout
+            if "io.github.jeffshee.Hidamari" in out:
+                return True
+        except Exception:
+            pass
+        try:
+            subprocess.Popen(
+                ["flatpak", "run", "io.github.jeffshee.Hidamari", "-b"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except FileNotFoundError:
+            print("ERRO: flatpak nao encontrado.")
+            return False
+        import time as _time
+        for _ in range(15):
+            _time.sleep(1)
+            try:
+                out = subprocess.run(
+                    ["flatpak", "ps", "--columns=application"],
+                    capture_output=True, text=True, timeout=10,
+                ).stdout
+                if "io.github.jeffshee.Hidamari" in out:
+                    _time.sleep(2)
+                    return True
+            except Exception:
+                pass
+    print("ERRO: Hidamari nao iniciou a tempo.")
+    return False
+
+
+def set_video_via_dbus(video_path):
+    """Envia video para o Hidamari via D-Bus (inicia ele se preciso)."""
+    for attempt in range(3):
+        try:
+            ok, err = _gdbus_video_call(video_path)
+            if ok:
+                print(f"  Video Hidamari: {Path(video_path).name}")
+                return True
+            if "ServiceUnknown" in err or "not provided" in err:
+                print(f"  Hidamari parado. Tentativa {attempt + 1}/3...")
+                if _ensure_hidamari_running():
+                    ok, err = _gdbus_video_call(video_path)
+                    if ok:
+                        print(f"  Video Hidamari: {Path(video_path).name}")
+                        return True
+        except FileNotFoundError:
+            print("ERRO: gdbus nao encontrado.")
+            return False
+        except subprocess.TimeoutExpired:
+            print("ERRO: D-Bus timeout.")
+            return False
+    print(f"ERRO D-Bus: {err}")
+    return False
 
 
 def cmd_set_video(args):
-    """Escolhe video aleatorio da pasta Hidamari e envia via D-Bus."""
+    """Envia video via D-Bus. Com name: aquele video; sem name: aleatorio (diferente do atual)."""
     videos = get_video_files()
     if not videos:
         print(f"ERRO: Nenhum video em {HIDAMARI_VIDEOS_DIR}")
         sys.exit(1)
 
-    chosen = random.choice(videos)
+    cfg = load_config()
+
+    if getattr(args, "name", None):
+        match = [v for v in videos if v.name == args.name]
+        if not match:
+            print(f"ERRO: Video '{args.name}' nao encontrado em {HIDAMARI_VIDEOS_DIR}")
+            sys.exit(1)
+        chosen = match[0]
+    else:
+        current_name = cfg.get("current_video")
+        if len(videos) > 1:
+            available = [v for v in videos if v.name != current_name]
+            if not available:
+                available = videos
+            chosen = random.choice(available)
+        else:
+            chosen = videos[0]
+
+    if not _write_hidamari_video_config(chosen):
+        print(f"ERRO: nao foi possivel gravar {HIDAMARI_CONFIG_FILE}")
+        sys.exit(1)
+
     if not set_video_via_dbus(chosen):
         sys.exit(1)
 
-    cfg = load_config()
     cfg["current_mode"] = "video"
     cfg["current_video"] = chosen.name
     save_config(cfg)
     rearm_timer()
 
 
+def generate_video_thumbnail(video_path):
+    """Gera thumbnail de um video via ffmpeg. Retorna caminho da thumbnail."""
+    THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
+    thumb_name = f"{hashlib.md5(str(video_path).encode()).hexdigest()[:12]}.jpg"
+    thumb_path = THUMBNAILS_DIR / thumb_name
+    if thumb_path.exists():
+        return str(thumb_path)
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-ss", "1", "-i", str(video_path),
+             "-frames:v", "1", "-q:v", "3", str(thumb_path)],
+            capture_output=True, timeout=15,
+        )
+        if thumb_path.exists():
+            return str(thumb_path)
+    except Exception:
+        pass
+    return None
+
+
+def quit_hidamari():
+    """Mata o processo Hidamari via flatpak kill."""
+    try:
+        out = subprocess.run(
+            ["flatpak", "ps", "--columns=instance,application"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout
+        for line in out.strip().splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and "io.github.jeffshee.Hidamari" in parts[1]:
+                subprocess.run(
+                    ["flatpak", "kill", parts[0]],
+                    capture_output=True, timeout=10,
+                )
+        return True
+    except Exception:
+        return False
+
+
 def cmd_list_videos(args):
-    """Lista videos da pasta Hidamari como JSON."""
+    """Lista videos da pasta Hidamari como JSON (com thumbnails)."""
     videos = get_video_files()
     result = []
     for v in videos:
         stat = v.stat()
+        thumb = generate_video_thumbnail(v)
         result.append({
             "name": v.name,
             "path": str(v),
             "size": stat.st_size,
+            "thumbnail": thumb,
         })
     print(json.dumps(result))
 
 
 def cmd_set_mode(args):
-    """Altera o modo (photo/video) e salva na config."""
+    """Altera o modo (photo/video). Ao mudar pra photo, mata Hidamari e aplica foto."""
     cfg = load_config()
+    old_mode = cfg.get("current_mode", "photo")
     cfg["current_mode"] = args.mode
     save_config(cfg)
+
+    if args.mode == "photo" and old_mode == "video":
+        quit_hidamari()
+        metadata = load_metadata()
+        images = metadata.get("images", [])
+        if images:
+            current_id = metadata.get("current_id")
+            available = [i for i in images if i["id"] != current_id]
+            if not available:
+                available = images[:]
+            chosen = random.choice(available)
+            filepath = PHOTOS_DIR / chosen["filename"]
+            if filepath.exists():
+                WALLPAPERS_DIR.mkdir(parents=True, exist_ok=True)
+                if HAS_PILLOW:
+                    pil_img = Image.open(str(filepath))
+                    temp_path = WALLPAPERS_DIR / "current_wallpaper.jpg"
+                    pil_img.save(str(temp_path), "JPEG", quality=95)
+                    set_wallpaper(str(temp_path))
+                else:
+                    set_wallpaper(str(filepath))
+                metadata["current_id"] = chosen["id"]
+                save_metadata(metadata)
+                print(f"  [AUTO] {chosen['original_name']} [FOTO]")
+        rearm_timer()
+
     print(json.dumps({"ok": True, "mode": args.mode}))
+
+
+def cmd_quit_hidamari(args):
+    """Mata o Hidamari."""
+    ok = quit_hidamari()
+    print(json.dumps({"ok": ok}))
+
+
+def cmd_remove_video(args):
+    """Remove um video da pasta Hidamari."""
+    name = args.name
+    target = HIDAMARI_VIDEOS_DIR / name
+    if not target.exists():
+        print(f"ERRO: Video '{name}' nao encontrado em {HIDAMARI_VIDEOS_DIR}")
+        sys.exit(1)
+    target.unlink()
+    thumb_name = f"{hashlib.md5(str(target).encode()).hexdigest()[:12]}.jpg"
+    thumb = THUMBNAILS_DIR / thumb_name
+    if thumb.exists():
+        thumb.unlink()
+    print(json.dumps({"ok": True, "removed": name}))
+
+
+def cmd_add_video(args):
+    """Copia um video para a pasta Hidamari e gera thumbnail."""
+    src = Path(args.video)
+    if not src.exists():
+        print(f"ERRO: Arquivo nao encontrado: {src}")
+        sys.exit(1)
+    if src.suffix.lower() not in VIDEO_EXTENSIONS:
+        print(f"ERRO: Formato nao suportado: {src.suffix}")
+        sys.exit(1)
+    HIDAMARI_VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
+    dest = HIDAMARI_VIDEOS_DIR / src.name
+    if dest.exists() and dest.resolve() != src.resolve():
+        print(f"ERRO: Video '{src.name}' ja existe na pasta Hidamari.")
+        sys.exit(1)
+    if dest.resolve() != src.resolve():
+        shutil.copy2(str(src), str(dest))
+    generate_video_thumbnail(dest)
+    print(json.dumps({"ok": True, "added": src.name}))
 
 
 # ──────────────────────────────────────────────
@@ -449,17 +668,22 @@ def cmd_set(args):
 
     images = metadata.get("images", [])
 
-    available = [img for img in images if img["id"] != current_id]
-    if not available:
-        available = images[:]
+    if getattr(args, "id", None):
+        match = [img for img in images if img["id"] == args.id or img["original_name"] == args.id]
+        if not match:
+            print(f"ERRO: Imagem '{args.id}' nao encontrada.")
+            sys.exit(1)
+        chosen = match[0]
+    else:
+        available = [img for img in images if img["id"] != current_id]
+        if not available:
+            available = images[:]
 
-    if not available:
-        print("Nenhuma imagem disponivel. Use 'add'.")
-        sys.exit(1)
+        if not available:
+            print("Nenhuma imagem disponivel. Use 'add'.")
+            sys.exit(1)
 
-    WALLPAPERS_DIR.mkdir(parents=True, exist_ok=True)
-
-    chosen = random.choice(available)
+        chosen = random.choice(available)
     filepath = PHOTOS_DIR / chosen["filename"]
     if not filepath.exists():
         print(f"ERRO: Arquivo nao encontrado: {chosen['filename']}")
@@ -529,12 +753,22 @@ def main():
     p_add.add_argument("image", type=str, help="Caminho da imagem")
 
     sub.add_parser("list", help="Lista imagens no storage")
-    sub.add_parser("set", help="Troca wallpaper (aleatorio, photo ou video)")
+    p_set = sub.add_parser("set", help="Troca wallpaper (aleatorio, photo ou video)")
+    p_set.add_argument("--id", type=str, default=None, help="ID ou nome da foto especifica")
     sub.add_parser("list-videos", help="Lista videos da pasta Hidamari")
-    sub.add_parser("set-video", help="Troca video via Hidamari D-Bus")
+    p_set_vid = sub.add_parser("set-video", help="Troca video via Hidamari D-Bus")
+    p_set_vid.add_argument("name", type=str, nargs="?", default=None, help="Nome do video especifico")
 
     p_set_mode = sub.add_parser("set-mode", help="Altera modo (photo/video)")
     p_set_mode.add_argument("mode", type=str, choices=["photo", "video"])
+
+    sub.add_parser("quit-hidamari", help="Mata o processo Hidamari")
+
+    p_remove_vid = sub.add_parser("remove-video", help="Remove video da pasta Hidamari")
+    p_remove_vid.add_argument("name", type=str, help="Nome do arquivo de video")
+
+    p_add_vid = sub.add_parser("add-video", help="Adiciona video a pasta Hidamari")
+    p_add_vid.add_argument("video", type=str, help="Caminho do video")
 
     p_remove = sub.add_parser("remove", help="Remove imagem do storage")
     p_remove.add_argument("id", type=str, help="ID ou nome da imagem")
@@ -571,6 +805,12 @@ def main():
         cmd_set_video(args)
     elif args.command == "set-mode":
         cmd_set_mode(args)
+    elif args.command == "quit-hidamari":
+        cmd_quit_hidamari(args)
+    elif args.command == "remove-video":
+        cmd_remove_video(args)
+    elif args.command == "add-video":
+        cmd_add_video(args)
     elif args.command == "remove":
         cmd_remove(args)
     elif args.command == "status":

@@ -471,6 +471,46 @@ body {
   opacity: 0.4;
 }
 
+/* ─── RENDER BTN (hover, bottom-left) ─── */
+.cyber-render {
+  position: absolute;
+  bottom: 8px; left: 8px;
+  width: 26px; height: 26px;
+  background: rgba(6, 9, 26, 0.85);
+  border: 1px solid var(--neon-cyan);
+  color: var(--neon-cyan);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 12px;
+  font-weight: 700;
+  opacity: 0;
+  transition: all 0.2s ease;
+  clip-path: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px);
+  z-index: 2;
+}
+.cyber-card:hover .cyber-render {
+  opacity: 1;
+}
+.cyber-render:hover {
+  background: rgba(0, 255, 255, 0.2);
+  box-shadow: 0 0 10px rgba(0, 255, 255, 0.3);
+}
+.cyber-render.magenta {
+  border-color: var(--neon-magenta);
+  color: var(--neon-magenta);
+}
+.cyber-render.magenta:hover {
+  background: rgba(255, 0, 255, 0.2);
+  box-shadow: 0 0 10px rgba(255, 0, 255, 0.3);
+}
+.cyber-render:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
 /* ─── PRESET CHIP ─── */
 .cyber-chip {
   font-family: 'Share Tech Mono', monospace;
