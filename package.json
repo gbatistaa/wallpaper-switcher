@@ -22,7 +22,7 @@
     "linux": {
       "target": ["deb", "AppImage"],
       "category": "Utility",
-      "icon": "/home/gbatistadev/Pictures/Icons/omnitrix.png",
+      "icon": "public/omnitrix.png",
       "maintainer": "gbatistadev <gbatistadev@users.noreply.github.com>"
     },
     "deb": {

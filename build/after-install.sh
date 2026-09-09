@@ -16,12 +16,7 @@ if [ -f "$APP" ]; then
     ln -sf "$APP" "$SYSBIN/wallpaper-switcher-gui"
 fi
 
-# O .deb nao deve criar entrada de menu (o usario mantem a propria);
-# remove a que o pacote/electron-builder gerou.
-rm -f /usr/share/applications/wallpaper-switcher-gui.desktop
-
-# Espaco no caminho (/opt/Wallpaper Switcher) quebra o sandbox do Electron;
-# caso alguma entrada de menu exista, reforca --no-sandbox.
+# Garante a entrada de menu com --no-sandbox (espaco no caminho quebra o sandbox).
 DESKTOP=/usr/share/applications/wallpaper-switcher-gui.desktop
 if [ -f "$DESKTOP" ] && ! grep -q -- '--no-sandbox' "$DESKTOP"; then
     sed -i 's#^Exec=.*$#Exec="/opt/Wallpaper Switcher/wallpaper-switcher-gui" --no-sandbox %U#' "$DESKTOP"
