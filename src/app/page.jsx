@@ -19,6 +19,8 @@ export default function Home() {
   const [currentMode, setCurrentMode] = useState('photo');
   const [videos, setVideos] = useState([]);
   const [pendingVideoDelete, setPendingVideoDelete] = useState(null);
+  const [hidamari, setHidamari] = useState({ installed: true, has_flatpak: true });
+  const [hidamariBusy, setHidamariBusy] = useState(false);
 
   // applyTimer roda num setTimeout; o closure capturaria 'config' antigo.
   // Um ref sempre aponta para a ultima config commitada (evita agendar
@@ -61,6 +63,41 @@ export default function Home() {
     setNextTrigger(timer);
     setCurrentMode(mode);
     setVideos(vids);
+    try {
+      const hs = await api.hidamariStatus();
+      if (hs && hs.ok !== false) setHidamari({ installed: !!hs.installed, has_flatpak: hs.has_flatpak !== false });
+    } catch (e) {}
+  }
+
+  async function handleInstallHidamari() {
+    const api = window.api;
+    if (!api || hidamariBusy) return;
+    // Sem flatpak: pede senha de admin via pkexec (dialogo do sistema).
+    if (!hidamari.has_flatpak) {
+      setHidamariBusy(true);
+      const id = toast.loading('PEDINDO PERMISSAO DE ADMIN PARA INSTALAR O FLATPAK...');
+      const fr = await api.ensureFlatpak();
+      toast.dismiss(id);
+      setHidamariBusy(false);
+      if (fr && fr.ok) {
+        setHidamari({ installed: false, has_flatpak: true });
+        toast.success('FLATPAK INSTALADO — AGORA INSTALE O HIDAMARI');
+      } else {
+        toast.error('FALHA: ' + ((fr && fr.error) || 'erro desconhecido'));
+      }
+      return;
+    }
+    setHidamariBusy(true);
+    const id = toast.loading('INSTALANDO HIDAMARI (FLATPAK --USER, SEM SUDO)...');
+    const result = await api.ensureHidamari();
+    toast.dismiss(id);
+    setHidamariBusy(false);
+    if (result && result.ok) {
+      setHidamari({ installed: true, has_flatpak: true });
+      toast.success('HIDAMARI INSTALADO');
+    } else {
+      toast.error('FALHA: ' + ((result && result.error) || 'erro desconhecido'));
+    }
   }
 
   async function handleAdd() {
@@ -478,6 +515,22 @@ export default function Home() {
               <span style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: 10, color: 'var(--text-dim)' }}>
                 HIDAMARI FOLDER: ~/Videos/Hidamari
               </span>
+            )}
+            {currentMode === 'video' && !hidamari.installed && (
+              <div style={{
+                marginTop: 12, padding: '10px 14px', border: '1px solid var(--neon-pink)',
+                background: 'rgba(255,0,128,0.08)', fontFamily: "'Share Tech Mono', monospace", fontSize: 11,
+                display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap',
+              }}>
+                <span style={{ color: 'var(--neon-pink)' }}>
+                  {hidamari.has_flatpak
+                    ? 'HIDAMARI NAO INSTALADO — videos precisam dele.'
+                    : 'FLATPAK NAO ENCONTRADO — precisa instalar (pede senha de admin).'}
+                </span>
+                <button className="cyber-btn magenta" onClick={handleInstallHidamari} disabled={hidamariBusy} style={{ flexShrink: 0 }}>
+                  {hidamariBusy ? 'INSTALANDO...' : (hidamari.has_flatpak ? '⬇ INSTALAR HIDAMARI (SEM SUDO)' : '⬇ INSTALAR FLATPAK (ADMIN)')}
+                </button>
+              </div>
             )}
           </div>
           <div className="cyber-divider" style={{ marginTop: 16 }} />

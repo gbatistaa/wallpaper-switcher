@@ -311,6 +311,43 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('quit-hidamari', () => runScript('quit-hidamari'));
 
+  ipcMain.handle('hidamari-status', () => {
+    const result = runScript('hidamari-status');
+    if (!result.success) return { ok: false, installed: false, has_flatpak: false };
+    try { return JSON.parse(result.output.trim()); }
+    catch (e) { return { ok: false, installed: false, has_flatpak: false }; }
+  });
+
+  // Flatpak do sistema: precisa de admin -> pkexec abre o dialogo de senha.
+  ipcMain.handle('ensure-flatpak', () => {
+    try {
+      const result = execSync(`python3 "${SCRIPT_PATH}" install-flatpak`, { encoding: 'utf-8', timeout: 600000 });
+      try { return JSON.parse(result.trim()); }
+      catch (e) { return { ok: true }; }
+    } catch (e) {
+      const out = (e.stdout || e.stderr || e.message || '').toString();
+      try {
+        const j = JSON.parse(out.trim().split('\n').pop());
+        if (j && j.ok === false) return j;
+      } catch (_) {}
+      return { ok: false, error: out.slice(-500) || 'falha ao instalar flatpak' };
+    }
+  });
+  ipcMain.handle('ensure-hidamari', () => {
+    try {
+      const result = execSync(`python3 "${SCRIPT_PATH}" ensure-hidamari`, { encoding: 'utf-8', timeout: 600000 });
+      try { return JSON.parse(result.trim()); }
+      catch (e) { return { ok: true, installed: true }; }
+    } catch (e) {
+      const out = (e.stdout || e.stderr || e.message || '').toString();
+      try {
+        const j = JSON.parse(out.trim().split('\n').pop());
+        if (j && j.ok === false) return j;
+      } catch (_) {}
+      return { ok: false, error: out.slice(-500) || 'falha ao instalar hidamari' };
+    }
+  });
+
   ipcMain.handle('remove-video', (_, name) => runScript(`remove-video "${name}"`));
 
   ipcMain.handle('add-video', async (_, filePath) => runScript(`add-video "${filePath}"`));

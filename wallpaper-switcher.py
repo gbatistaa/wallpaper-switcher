@@ -324,6 +324,91 @@ def generate_video_thumbnail(video_path):
     return None
 
 
+HIDAMARI_FLATPAK_ID = "io.github.jeffshee.Hidamari"
+HIDAMARI_FLATHUB_URL = "https://flathub.org/repo/flathub.flatpakrepo"
+
+
+def is_hidamari_installed():
+    """Checa se o Hidamari esta instalado (system ou user). Sem sudo."""
+    try:
+        out = subprocess.run(
+            ["flatpak", "list", "--app", "--columns=application"],
+            capture_output=True, text=True, timeout=15,
+        ).stdout
+        return HIDAMARI_FLATPAK_ID in out
+    except FileNotFoundError:
+        return False
+    except Exception:
+        return False
+
+
+def cmd_hidamari_status(args):
+    """Retorna JSON: {installed, has_flatpak}. So leitura, sem sudo."""
+    try:
+        subprocess.run(["flatpak", "--version"], capture_output=True, timeout=10)
+        has_flatpak = True
+    except Exception:
+        has_flatpak = False
+    installed = is_hidamari_installed() if has_flatpak else False
+    print(json.dumps({"ok": True, "installed": installed, "has_flatpak": has_flatpak}))
+
+
+def cmd_ensure_hidamari(args):
+    """Instala o Hidamari via flatpak --user (sem sudo)."""
+    try:
+        subprocess.run(["flatpak", "--version"], capture_output=True, timeout=10, check=True)
+    except Exception:
+        print(json.dumps({"ok": False, "error": "flatpak nao instalado. Instale o flatpak pela sua distro e tente de novo."}))
+        sys.exit(1)
+    r = subprocess.run(
+        ["flatpak", "remote-add", "--user", "--if-not-exists",
+         "flathub", HIDAMARI_FLATHUB_URL],
+        capture_output=True, text=True, timeout=60,
+    )
+    if r.returncode != 0:
+        print(json.dumps({"ok": False, "error": r.stderr.strip() or "falha ao adicionar flathub"}))
+        sys.exit(1)
+    r = subprocess.run(
+        ["flatpak", "install", "--user", "-y", "flathub", HIDAMARI_FLATPAK_ID],
+        capture_output=True, text=True, timeout=600,
+    )
+    if r.returncode != 0:
+        print(json.dumps({"ok": False, "error": r.stderr.strip()[-500:] or "falha ao instalar hidamari"}))
+        sys.exit(1)
+    print(json.dumps({"ok": True, "installed": True}))
+
+
+def cmd_install_flatpak(args):
+    """Instala o flatpak usando pkexec (pede senha de admin na janelinha do sistema).
+
+    Detecta o gerenciador de pacotes (apt/dnf/pacman/zypper). Sem senha
+    salva em lugar nenhum: o proprio pkexec exibe o dialogo de autenticacao.
+    """
+    import shutil as _shutil
+    mgr = None
+    cmd = None
+    if _shutil.which("apt-get"):
+        mgr, cmd = "apt", ["pkexec", "apt-get", "install", "-y", "flatpak"]
+    elif _shutil.which("dnf"):
+        mgr, cmd = "dnf", ["pkexec", "dnf", "install", "-y", "flatpak"]
+    elif _shutil.which("pacman"):
+        mgr, cmd = "pacman", ["pkexec", "pacman", "-S", "--noconfirm", "flatpak"]
+    elif _shutil.which("zypper"):
+        mgr, cmd = "zypper", ["pkexec", "zypper", "--non-interactive", "install", "flatpak"]
+    else:
+        print(json.dumps({"ok": False, "error": "gerenciador de pacotes nao suportado. Instale o flatpak manualmente."}))
+        sys.exit(1)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    except FileNotFoundError:
+        print(json.dumps({"ok": False, "error": "pkexec nao encontrado neste sistema."}))
+        sys.exit(1)
+    if r.returncode != 0:
+        print(json.dumps({"ok": False, "error": (r.stderr.strip() or "instalacao cancelada/negada")[-500:]}))
+        sys.exit(1)
+    print(json.dumps({"ok": True, "manager": mgr}))
+
+
 def quit_hidamari():
     """Mata o processo Hidamari via flatpak kill."""
     try:
@@ -764,6 +849,10 @@ def main():
 
     sub.add_parser("quit-hidamari", help="Mata o processo Hidamari")
 
+    sub.add_parser("hidamari-status", help="Checa se o Hidamari esta instalado (JSON)")
+    sub.add_parser("ensure-hidamari", help="Instala o Hidamari via flatpak --user (sem sudo)")
+    sub.add_parser("install-flatpak", help="Instala o flatpak via pkexec (pede senha de admin)")
+
     p_remove_vid = sub.add_parser("remove-video", help="Remove video da pasta Hidamari")
     p_remove_vid.add_argument("name", type=str, help="Nome do arquivo de video")
 
@@ -807,6 +896,12 @@ def main():
         cmd_set_mode(args)
     elif args.command == "quit-hidamari":
         cmd_quit_hidamari(args)
+    elif args.command == "hidamari-status":
+        cmd_hidamari_status(args)
+    elif args.command == "ensure-hidamari":
+        cmd_ensure_hidamari(args)
+    elif args.command == "install-flatpak":
+        cmd_install_flatpak(args)
     elif args.command == "remove-video":
         cmd_remove_video(args)
     elif args.command == "add-video":
