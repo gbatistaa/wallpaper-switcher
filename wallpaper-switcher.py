@@ -34,6 +34,12 @@ SERVICE_UNIT = SYSTEMD_USER_DIR / "wallpaper-switcher.service"
 TIMER_UNIT = SYSTEMD_USER_DIR / "wallpaper-switcher.timer"
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp"}
+VIDEO_EXTENSIONS = {".mp4", ".mkv", ".webm"}
+
+HIDAMARI_VIDEOS_DIR = Path.home() / "Videos" / "Hidamari"
+HIDAMARI_DBUS_DEST = "io.github.jeffshee.Hidamari.server"
+HIDAMARI_DBUS_PATH = "/io/github/jeffshee/Hidamari/server"
+HIDAMARI_DBUS_IFACE = "io.github.jeffshee.hidamari.server"
 
 DEFAULT_CONFIG = {
     "timer_hours": 2,
@@ -41,6 +47,7 @@ DEFAULT_CONFIG = {
     "timer_mode": "interval",
     "jpeg_quality": 80,
     "max_width": 3840,
+    "current_mode": "photo",
 }
 
 
@@ -127,6 +134,86 @@ def clean_old_wallpapers(keep=20):
     if len(files) > keep:
         for f in files[:-keep]:
             f.unlink()
+
+
+# ──────────────────────────────────────────────
+# Hidamari video integration
+# ──────────────────────────────────────────────
+
+def get_video_files():
+    """Lista videos disponiveis na pasta do Hidamari."""
+    if not HIDAMARI_VIDEOS_DIR.exists():
+        return []
+    return sorted(
+        f for f in HIDAMARI_VIDEOS_DIR.iterdir()
+        if f.is_file() and f.suffix.lower() in VIDEO_EXTENSIONS
+    )
+
+
+def set_video_via_dbus(video_path):
+    """Envia video para o Hidamari via D-Bus."""
+    try:
+        result = subprocess.run(
+            [
+                "gdbus", "call", "--session",
+                "--dest", HIDAMARI_DBUS_DEST,
+                "--object-path", HIDAMARI_DBUS_PATH,
+                "--method", f"{HIDAMARI_DBUS_IFACE}.video",
+                str(video_path), "Default",
+            ],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            print(f"ERRO D-Bus: {result.stderr.strip()}")
+            return False
+        print(f"  Video Hidamari: {Path(video_path).name}")
+        return True
+    except FileNotFoundError:
+        print("ERRO: gdbus nao encontrado. Instale gdbus.")
+        return False
+    except subprocess.TimeoutExpired:
+        print("ERRO: D-Bus timeout.")
+        return False
+
+
+def cmd_set_video(args):
+    """Escolhe video aleatorio da pasta Hidamari e envia via D-Bus."""
+    videos = get_video_files()
+    if not videos:
+        print(f"ERRO: Nenhum video em {HIDAMARI_VIDEOS_DIR}")
+        sys.exit(1)
+
+    chosen = random.choice(videos)
+    if not set_video_via_dbus(chosen):
+        sys.exit(1)
+
+    cfg = load_config()
+    cfg["current_mode"] = "video"
+    cfg["current_video"] = chosen.name
+    save_config(cfg)
+    rearm_timer()
+
+
+def cmd_list_videos(args):
+    """Lista videos da pasta Hidamari como JSON."""
+    videos = get_video_files()
+    result = []
+    for v in videos:
+        stat = v.stat()
+        result.append({
+            "name": v.name,
+            "path": str(v),
+            "size": stat.st_size,
+        })
+    print(json.dumps(result))
+
+
+def cmd_set_mode(args):
+    """Altera o modo (photo/video) e salva na config."""
+    cfg = load_config()
+    cfg["current_mode"] = args.mode
+    save_config(cfg)
+    print(json.dumps({"ok": True, "mode": args.mode}))
 
 
 # ──────────────────────────────────────────────
@@ -348,7 +435,15 @@ def cmd_list(args):
 
 
 def cmd_set(args):
-    """Escolhe wallpaper aleatorio (diferente do atual) e seta."""
+    """Escolhe wallpaper aleatorio (diferente do atual) e seta.
+    Checa current_mode: photo -> gsettings, video -> Hidamari D-Bus."""
+    cfg = load_config()
+    current_mode = cfg.get("current_mode", "photo")
+
+    if current_mode == "video":
+        cmd_set_video(args)
+        return
+
     metadata = load_metadata()
     current_id = metadata.get("current_id")
 
@@ -410,11 +505,14 @@ def cmd_status(args):
     metadata = load_metadata()
     cfg = load_config()
     images = metadata.get("images", [])
+    videos = get_video_files()
 
+    print(f"Modo: {cfg.get('current_mode', 'photo').upper()}")
     print(f"Fotos no storage: {len(images)}")
     if images:
         total = sum(img.get("compressed_size", 0) for img in images)
         print(f"Tamanho fotos: {total / 1024 / 1024:.1f}MB")
+    print(f"Videos Hidamari: {len(videos)}")
     print(f"Qualidade JPEG: {cfg.get('jpeg_quality', 80)}")
     print(f"Max largura: {cfg.get('max_width', 3840)}px")
     print(f"Timer: {cfg.get('timer_hours', 2)}h {cfg.get('timer_minutes', 0)}min ({cfg.get('timer_mode', 'interval')})")
@@ -431,7 +529,12 @@ def main():
     p_add.add_argument("image", type=str, help="Caminho da imagem")
 
     sub.add_parser("list", help="Lista imagens no storage")
-    sub.add_parser("set", help="Troca wallpaper (aleatorio)")
+    sub.add_parser("set", help="Troca wallpaper (aleatorio, photo ou video)")
+    sub.add_parser("list-videos", help="Lista videos da pasta Hidamari")
+    sub.add_parser("set-video", help="Troca video via Hidamari D-Bus")
+
+    p_set_mode = sub.add_parser("set-mode", help="Altera modo (photo/video)")
+    p_set_mode.add_argument("mode", type=str, choices=["photo", "video"])
 
     p_remove = sub.add_parser("remove", help="Remove imagem do storage")
     p_remove.add_argument("id", type=str, help="ID ou nome da imagem")
@@ -462,6 +565,12 @@ def main():
         cmd_list(args)
     elif args.command == "set":
         cmd_set(args)
+    elif args.command == "list-videos":
+        cmd_list_videos(args)
+    elif args.command == "set-video":
+        cmd_set_video(args)
+    elif args.command == "set-mode":
+        cmd_set_mode(args)
     elif args.command == "remove":
         cmd_remove(args)
     elif args.command == "status":

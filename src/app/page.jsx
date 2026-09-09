@@ -16,6 +16,8 @@ export default function Home() {
   const [dragOver, setDragOver] = useState(false);
   const [previewMedia, setPreviewMedia] = useState(null);
   const [booted, setBooted] = useState(false);
+  const [currentMode, setCurrentMode] = useState('photo');
+  const [videos, setVideos] = useState([]);
 
   // applyTimer roda num setTimeout; o closure capturaria 'config' antigo.
   // Um ref sempre aponta para a ultima config commitada (evita agendar
@@ -48,13 +50,16 @@ export default function Home() {
   async function loadData() {
     const api = window.api;
     if (!api) return;
-    const [imgs, cfg, timer] = await Promise.all([
-      api.getImages(), api.getConfig(), api.getTimerStatus()
+    const [imgs, cfg, timer, mode, vids] = await Promise.all([
+      api.getImages(), api.getConfig(), api.getTimerStatus(),
+      api.getMode(), api.listVideos(),
     ]);
     setImages(imgs);
     setConfig(cfg);
     setTimerActive(timer.active);
     setNextTrigger(timer);
+    setCurrentMode(mode);
+    setVideos(vids);
   }
 
   async function handleAdd() {
@@ -121,6 +126,32 @@ export default function Home() {
     }
     await loadData();
     setLoading(false);
+  }
+
+  async function handleSetVideo() {
+    const api = window.api;
+    setLoading(true);
+    const id = toast.loading('TROCANDO VIDEO VIA HIDAMARI...');
+    const result = await api.setVideo();
+    toast.dismiss(id);
+    if (result.success) {
+      toast.success('VIDEO ATIVADO VIA HIDAMARI');
+    } else {
+      toast.error('FALHA: ' + result.output);
+    }
+    await loadData();
+    setLoading(false);
+  }
+
+  async function handleModeSwitch(mode) {
+    if (mode === currentMode) return;
+    const api = window.api;
+    await api.setMode(mode);
+    setCurrentMode(mode);
+    toast.success(`MODO: ${mode.toUpperCase()}`);
+    if (mode === 'video') {
+      await loadData();
+    }
   }
 
   async function handleToggleTimer() {
@@ -338,6 +369,47 @@ export default function Home() {
               </div>
             </div>
           </div>
+
+          {/* ███ MODE TOGGLE ███ */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+            <span style={{ fontFamily: 'Orbitron', fontWeight: 600, fontSize: 12, letterSpacing: 2, color: 'var(--text-secondary)' }}>
+              MODE:
+            </span>
+            <div style={{ display: 'flex', gap: 0, border: '1px solid var(--border-neon)', overflow: 'hidden' }}>
+              <button
+                onClick={() => handleModeSwitch('photo')}
+                style={{
+                  fontFamily: "'Share Tech Mono', monospace", fontSize: 11, letterSpacing: 1,
+                  padding: '6px 16px', border: 'none', cursor: 'pointer',
+                  background: currentMode === 'photo' ? 'rgba(0,255,255,0.15)' : 'transparent',
+                  color: currentMode === 'photo' ? 'var(--neon-cyan)' : 'var(--text-dim)',
+                  borderBottom: currentMode === 'photo' ? '2px solid var(--neon-cyan)' : '2px solid transparent',
+                  transition: 'all 0.2s ease',
+                }}
+              >
+                &#128247; PHOTOS
+              </button>
+              <button
+                onClick={() => handleModeSwitch('video')}
+                style={{
+                  fontFamily: "'Share Tech Mono', monospace", fontSize: 11, letterSpacing: 1,
+                  padding: '6px 16px', border: 'none', borderLeft: '1px solid var(--border-neon)',
+                  cursor: 'pointer',
+                  background: currentMode === 'video' ? 'rgba(255,0,255,0.15)' : 'transparent',
+                  color: currentMode === 'video' ? 'var(--neon-magenta)' : 'var(--text-dim)',
+                  borderBottom: currentMode === 'video' ? '2px solid var(--neon-magenta)' : '2px solid transparent',
+                  transition: 'all 0.2s ease',
+                }}
+              >
+                &#127909; VIDEOS
+              </button>
+            </div>
+            {currentMode === 'video' && (
+              <span style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: 10, color: 'var(--text-dim)' }}>
+                HIDAMARI FOLDER: ~/Videos/Hidamari
+              </span>
+            )}
+          </div>
           <div className="cyber-divider" style={{ marginTop: 16 }} />
         </div>
 
@@ -346,14 +418,25 @@ export default function Home() {
           <button className="cyber-btn" onClick={handleAdd} disabled={loading} style={{ flexShrink: 0 }}>
             + INJECT DATA
           </button>
-          <button
-            className="cyber-btn magenta"
-            onClick={handleSetWallpaper}
-            disabled={loading || totalMedia === 0}
-            style={{ flexShrink: 0 }}
-          >
-            &#9654; RENDER NOW
-          </button>
+          {currentMode === 'photo' ? (
+            <button
+              className="cyber-btn magenta"
+              onClick={handleSetWallpaper}
+              disabled={loading || totalMedia === 0}
+              style={{ flexShrink: 0 }}
+            >
+              &#9654; RENDER NOW
+            </button>
+          ) : (
+            <button
+              className="cyber-btn magenta"
+              onClick={handleSetVideo}
+              disabled={loading || videos.length === 0}
+              style={{ flexShrink: 0 }}
+            >
+              &#9654; RENDER VIDEO
+            </button>
+          )}
 
           {/* Timer status badge */}
           <div style={{
@@ -496,7 +579,7 @@ export default function Home() {
         </div>
 
         {/* ███ PHOTOS SECTION ███ */}
-        {images.length > 0 && (
+        {currentMode === 'photo' && images.length > 0 && (
           <div style={{ marginBottom: 28, animation: 'slideInUp 1s ease' }}>
             <div className="cyber-section-header">
               <span style={{ color: 'var(--neon-cyan)', textShadow: '0 0 8px rgba(0,255,255,0.4)', fontSize: 16 }}>&#9632;</span>
@@ -550,8 +633,54 @@ export default function Home() {
           </div>
         )}
 
+        {/* ███ VIDEO BUFFER SECTION ███ */}
+        {currentMode === 'video' && videos.length > 0 && (
+          <div style={{ marginBottom: 28, animation: 'slideInUp 1s ease' }}>
+            <div className="cyber-section-header">
+              <span style={{ color: 'var(--neon-magenta)', textShadow: '0 0 8px rgba(255,0,255,0.4)', fontSize: 16 }}>&#9654;</span>
+              <span className="neon-text-cyan" style={{ color: 'var(--neon-magenta)', textShadow: '0 0 8px rgba(255,0,255,0.4)' }}>
+                VIDEO_BUFFER [{String(videos.length).padStart(2, '0')}]
+              </span>
+              <span className="line" />
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 14 }}>
+              {videos.map((vid, idx) => (
+                <div
+                  key={vid.name}
+                  className="cyber-card"
+                  style={{
+                    animation: `slideInUp 0.5s ease ${idx * 0.04}s both`,
+                    borderColor: 'rgba(255,0,255,0.15)',
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'rgba(255,0,255,0.5)'; e.currentTarget.style.boxShadow = '0 0 15px rgba(255,0,255,0.15)'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'rgba(255,0,255,0.15)'; e.currentTarget.style.boxShadow = 'none'; }}
+                >
+                  <div style={{
+                    height: 140, background: 'var(--bg-deep)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    borderBottom: '1px solid rgba(255,0,255,0.15)',
+                  }}>
+                    <span style={{ fontSize: 32, color: 'var(--neon-magenta)', textShadow: '0 0 15px rgba(255,0,255,0.5)' }}>&#127909;</span>
+                  </div>
+                  <div style={{ padding: '10px 12px' }}>
+                    <div style={{
+                      fontFamily: "'Share Tech Mono', monospace", fontSize: 11,
+                      color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>
+                      {vid.name}
+                    </div>
+                    <div style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: 10, color: 'var(--text-dim)', marginTop: 4 }}>
+                      {formatSize(vid.size)}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* ███ EMPTY STATE ███ */}
-        {totalMedia === 0 && (
+        {currentMode === 'photo' && totalMedia === 0 && (
           <div className="cyber-empty cyber-corners" style={{ padding: 60, textAlign: 'center', animation: 'glitchIn 0.5s ease' }}>
             <div style={{ fontSize: 40, color: 'var(--neon-cyan)', textShadow: '0 0 20px rgba(0,255,255,0.4)', animation: 'neonPulse 2s ease infinite' }}>
               [ EMPTY ]
@@ -565,6 +694,24 @@ export default function Home() {
             <div className="cyber-terminal" style={{ marginTop: 16 }}>
               <span className="prompt">&gt;</span> <span className="cmd">wallpaper_sys --status</span><br />
               <span className="prompt">&gt;</span> no_media_found. awaiting_input<span className="cursor-blink" />
+            </div>
+          </div>
+        )}
+
+        {currentMode === 'video' && videos.length === 0 && (
+          <div className="cyber-empty cyber-corners" style={{ padding: 60, textAlign: 'center', animation: 'glitchIn 0.5s ease' }}>
+            <div style={{ fontSize: 40, color: 'var(--neon-magenta)', textShadow: '0 0 20px rgba(255,0,255,0.4)', animation: 'neonPulse 2s ease infinite' }}>
+              [ NO VIDEOS ]
+            </div>
+            <div style={{ fontFamily: 'Orbitron', fontWeight: 600, fontSize: 16, color: 'var(--neon-magenta)', letterSpacing: 2, marginTop: 16 }}>
+              HIDAMARI_VIDEO_BUFFER: 0
+            </div>
+            <div style={{ fontFamily: 'Share Tech Mono', fontSize: 13, color: 'var(--text-dim)', marginTop: 8 }}>
+              &gt; COLOQUE VIDEOS EM ~/Videos/Hidamari/
+            </div>
+            <div className="cyber-terminal" style={{ marginTop: 16 }}>
+              <span className="prompt">&gt;</span> <span className="cmd">ls ~/Videos/Hidamari/</span><br />
+              <span className="prompt">&gt;</span> no_video_found. awaiting_input<span className="cursor-blink" />
             </div>
           </div>
         )}
@@ -624,7 +771,7 @@ export default function Home() {
 
         {/* ███ FOOTER TERMINAL ███ */}
         <div style={{ marginTop: 12, padding: '14px 20px', border: '1px solid var(--border-neon)', background: 'rgba(6,9,26,0.5)', fontFamily: "'Share Tech Mono', monospace", fontSize: 11 }}>
-          <div style={{ color: 'var(--neon-green)' }}>&gt; SYS.LOG: wallpaper_switcher v1.0.0 :: MODE=PHOTOS :: {totalMedia} FILES INDEXED</div>
+          <div style={{ color: 'var(--neon-green)' }}>&gt; SYS.LOG: wallpaper_switcher v1.0.0 :: MODE={currentMode.toUpperCase()} :: {currentMode === 'photo' ? `${images.length} PHOTOS` : `${videos.length} VIDEOS`} INDEXED</div>
           <div style={{ color: 'var(--text-dim)', marginTop: 4 }}>
             &gt; [C]YBER-[P]UNK_ENGINE_ENABLED :: TIMER={timerActive ? 'ACTIVE' : 'STANDBY'}
             <span className="cursor-blink" style={{ marginLeft: 8 }} />

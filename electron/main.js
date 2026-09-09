@@ -267,6 +267,26 @@ app.whenReady().then(async () => {
   ipcMain.handle('remove-media', (_, id) => runScript(`remove "${id}"`));
   ipcMain.handle('set-wallpaper', () => runScript('set'));
 
+  ipcMain.handle('get-mode', () => {
+    const cfg = getConfig();
+    return cfg.current_mode || 'photo';
+  });
+
+  ipcMain.handle('set-mode', (_, mode) => {
+    const cfg = getConfig();
+    cfg.current_mode = mode;
+    saveConfig(cfg);
+    return { ok: true, mode };
+  });
+
+  ipcMain.handle('list-videos', () => {
+    const result = runScript('list-videos');
+    if (!result.success) return [];
+    try { return JSON.parse(result.output.trim()); } catch (e) { return []; }
+  });
+
+  ipcMain.handle('set-video', () => runScript('set-video'));
+
   ipcMain.handle('get-images', () => {
     const meta = getMetadata();
     return meta.images.map(img => ({
